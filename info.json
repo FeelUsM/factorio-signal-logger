@@ -1,0 +1,9 @@
+{
+	"name": "signal-logger",
+	"version": "0.1.0",
+	"title": "Signal Logger",
+	"author": "FeelUsM",
+	"factorio_version": "2.0",
+	"dependencies": ["base >= 2.0"],
+	"description": "Logs circuit network signals to file with timestamps."
+}
