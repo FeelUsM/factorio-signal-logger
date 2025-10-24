@@ -185,34 +185,43 @@ end)
 
 ---------------------------------------------------
 --- Инициализация ---
-local function constructor(entity)
+local function constructor(entity, name)
 	if entity and entity.name == "signal-logger" and entity.unit_number then
 		if storage.registered_loggers then
 			storage.registered_loggers[entity.unit_number] = entity
 		end
 		if storage.logger_names then
-			storage.logger_names[entity.unit_number] = ""
+			storage.logger_names[entity.unit_number] = name or ""
 		end
 		if storage.signals then
 			storage.signals[entity.unit_number] = {}
 		end
+		log_name_change(entity, "<creation>", name)
 	else
-		game.print("signal-logger: wrong enity\n")
+		game.print("signal-logger constructor: wrong enity\n")
 	end
 end
 
-script.on_event(defines.events.on_built_entity,                function(event) constructor(event.entity) end)  -- игрок построил руками
-script.on_event(defines.events.on_robot_built_entity,          function(event) constructor(event.entity) end)  -- робот построил
-script.on_event(defines.events.script_raised_built,            function(event) constructor(event.entity) end)  -- другой скрипт создал сущность
-script.on_event(defines.events.script_raised_revive,           function(event) constructor(event.entity) end)  -- сущность восстановлена из призрака скриптом
-script.on_event(defines.events.on_space_platform_built_entity, function(event) constructor(event.entity) end)  -- построено на космической 
+local function metaconstructor(event)
+	if event.entity and event.entity.name == "signal-logger" then
+		constructor(event.entity) 
+	end
+end
+
+--script.on_event(defines.events.on_built_entity,                metaconstructor)  -- игрок построил руками
+script.on_event(defines.events.on_robot_built_entity,          metaconstructor)  -- робот построил
+script.on_event(defines.events.script_raised_built,            metaconstructor)  -- другой скрипт создал сущность
+script.on_event(defines.events.script_raised_revive,           metaconstructor)  -- сущность восстановлена из призрака скриптом
+script.on_event(defines.events.on_space_platform_built_entity, metaconstructor)  -- построено на космической 
 
 local function destructor(entity)
 	if entity and entity.name == "signal-logger" and entity.unit_number then
 		if storage.logger_names then
+			log_name_change(entity, storage.logger_names[entity.unit_number], "<destroyed>")
 			helpers.write_file("signals.txt", string.format("%s [%d %s] destructed\n", tick2time(game.tick), entity.unit_number, storage.logger_names[entity.unit_number]), true)
 			storage.logger_names[entity.unit_number] = nil
 		else
+			log_name_change(entity, "???", "<destroyed>")
 			helpers.write_file("signals.txt", string.format("%s [%d ???] destructed\n", tick2time(game.tick), entity.unit_number), true)
 		end
 		if storage.signals then
@@ -221,12 +230,20 @@ local function destructor(entity)
 		if storage.registered_loggers then
 			storage.registered_loggers[entity.unit_number] = nil
 		end
+	else
+		game.print("signal-logger destructor: wrong enity\n")
 	end
 end
 
-script.on_event(defines.events.on_entity_died,         function(event) destructor(event.entity) end)
-script.on_event(defines.events.on_player_mined_entity, function(event) destructor(event.entity) end)
-script.on_event(defines.events.on_robot_mined_entity,  function(event) destructor(event.entity) end)
+local function metadestructor(event)
+	if event.entity and event.entity.name == "signal-logger" then
+		destructor(event.entity) 
+	end
+end
+
+script.on_event(defines.events.on_entity_died,         metadestructor)
+script.on_event(defines.events.on_player_mined_entity, metadestructor)
+script.on_event(defines.events.on_robot_mined_entity,  metadestructor)
 
 local function init()
 	if not storage then storage = {} end
@@ -263,79 +280,72 @@ end)
 -- Сохранение настроек в чертеж
 script.on_event(defines.events.on_player_setup_blueprint, function(event)
 	game.print("on_player_setup_blueprint")
---	local player = game.get_player(event.player_index)
---	if not player then return end
---	
---	local blueprint = player.blueprint_to_setup
---	if not blueprint or not blueprint.valid_for_read then
---		blueprint = player.cursor_stack
---	end
---	
---	if blueprint and blueprint.valid_for_read and blueprint.is_blueprint then
---		local entities = blueprint.get_blueprint_entities()
---		if not entities then return end
---		
---		local mapping = event.mapping.get()
---		
---		for idx, bp_entity in pairs(entities) do
---			if bp_entity.name == "signal-logger" then
---				-- Находим реальную сущность через mapping
---				local real_entity = mapping[idx]
---				if real_entity and real_entity.valid and real_entity.unit_number then
---					local name = global.logger_names[real_entity.unit_number]
---					if name and name ~= "" then
---						-- Сохраняем имя в tags чертежа
---						bp_entity.tags = bp_entity.tags or {}
---						bp_entity.tags.logger_name = name
---						blueprint.set_blueprint_entities(entities)
---					end
---				end
---			end
---		end
---	end
+	local player = game.get_player(event.player_index)
+	if not player then return end
+	
+	local blueprint = player.blueprint_to_setup
+	if not blueprint or not blueprint.valid_for_read then
+		blueprint = player.cursor_stack
+	end
+	
+	if blueprint and blueprint.valid_for_read and blueprint.is_blueprint then
+		local entities = blueprint.get_blueprint_entities()
+		if not entities then return end
+		
+		local mapping = event.mapping.get()
+		
+		for idx, bp_entity in pairs(entities) do
+			if bp_entity.name == "signal-logger" then
+				-- Находим реальную сущность через mapping
+				local real_entity = mapping[idx]
+				if real_entity and real_entity.valid and real_entity.unit_number then
+					local name = storage.logger_names[real_entity.unit_number]
+					if name and name ~= "" then
+						-- Сохраняем имя в tags чертежа
+						bp_entity.tags = bp_entity.tags or {}
+						bp_entity.tags.logger_name = name
+						blueprint.set_blueprint_entities(entities)
+					end
+				end
+			end
+		end
+	end
 end)
 
 -- Восстановление настроек из чертежа
 script.on_event(defines.events.on_built_entity, function(event)
 	game.print("on_built_entity")
---	local entity = event.created_entity or event.entity
---	if entity and entity.valid and entity.name == "signal-logger" and entity.unit_number then
---		-- Регистрируем логгер
---		global.registered_loggers[entity.unit_number] = entity
---		
---		-- Проверяем есть ли сохраненное имя в tags
---		if event.tags and event.tags.logger_name then
---			global.logger_names[entity.unit_number] = event.tags.logger_name
---			game.print(string.format("[Signal Logger] Restored name: '%s'", event.tags.logger_name))
---		end
---	end
+	local entity = event.created_entity or event.entity
+	if entity and entity.valid and entity.name == "signal-logger" and entity.unit_number then
+		-- Проверяем есть ли сохраненное имя в tags
+		local name = ""
+		if event.tags and event.tags.logger_name then
+			name = event.tags.logger_name
+		end
+		constructor(entity,name)
+	end
 end)
 
 -- Копирование настроек через Shift+ПКМ/ЛКМ
 script.on_event(defines.events.on_entity_settings_pasted, function(event)
-	game.print("on_entity_settings_pasted")
---	local source = event.source
---	local destination = event.destination
---	
---	if source and source.valid and source.name == "signal-logger" and
---	   destination and destination.valid and destination.name == "signal-logger" then
---		local source_id = source.unit_number
---		local dest_id = destination.unit_number
---		
---		if source_id and dest_id and global.logger_names then
---			local name = global.logger_names[source_id]
---			if name then
---				global.logger_names[dest_id] = name
---				local player = game.get_player(event.player_index)
---				if player then
---					player.create_local_flying_text{
---						text = string.format("Copied: '%s'", name),
---						position = destination.position
---					}
---				end
---			end
---		end
---	end
+	--game.print("on_entity_settings_pasted")
+	local source = event.source
+	local destination = event.destination
+	
+	if source and source.valid and source.name == "signal-logger" and
+	   destination and destination.valid and destination.name == "signal-logger" then
+		local source_id = source.unit_number
+		local dest_id = destination.unit_number
+		
+		if source_id and dest_id and storage.logger_names then
+			local name = storage.logger_names[source_id]
+			if name then
+				local old_name = storage.logger_names[dest_id]
+				storage.logger_names[dest_id] = name
+				log_name_change(destination, old_name, name)
+			end
+		end
+	end
 end)
 
 ---------------------------------------------------------------
