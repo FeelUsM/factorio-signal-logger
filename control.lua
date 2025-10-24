@@ -10,7 +10,7 @@ local function tick2time(t)
 	return string.format("%d-%02d:%02d:%02d.%02d", d, h, m, s, t)
 end
 
-local function log_name_change(entity, old_name, new_name)
+local function log_name(entity, message)
 	if not (entity and entity.valid) then
 		global_error = true
 		return
@@ -22,13 +22,12 @@ local function log_name_change(entity, old_name, new_name)
 	else
 		tick = "startup"
 	end
-	local line = string.format("%s, [%d: %d, %d], renamed \"%s\" -> \"%s\"\n", 
+	local line = string.format("%s, [%d: %d, %d], %s\n", 
 		tick, 
 		entity.unit_number,
 		pos.x, 
 		pos.y, 
-		old_name or "", 
-		new_name or ""
+		message
 	)
 	helpers.write_file("signals.txt", line, true)
 end
@@ -159,7 +158,7 @@ script.on_event(defines.events.on_gui_click, function(event)
 				
 				-- Логируем только если имя действительно изменилось
 				if old_name ~= new_name then
-					log_name_change(entity, old_name, new_name)
+					log_name(entity, string.format("renamed %s -> %s",old_name, new_name))
 					
 					-- Сохраняем новое имя в storage
 					storage.logger_names[unit_number] = new_name
@@ -196,7 +195,7 @@ local function constructor(entity, name)
 		if storage.signals then
 			storage.signals[entity.unit_number] = {}
 		end
-		log_name_change(entity, "<creation>", name)
+		log_name(entity, string.format("created %s", name))
 	else
 		game.print("signal-logger constructor: wrong enity\n")
 	end
@@ -217,11 +216,11 @@ script.on_event(defines.events.on_space_platform_built_entity, metaconstructor) 
 local function destructor(entity)
 	if entity and entity.name == "signal-logger" and entity.unit_number then
 		if storage.logger_names then
-			log_name_change(entity, storage.logger_names[entity.unit_number], "<destroyed>")
+			log_name(entity, string.format("destroyed %s",storage.logger_names[entity.unit_number]))
 			helpers.write_file("signals.txt", string.format("%s [%d %s] destructed\n", tick2time(game.tick), entity.unit_number, storage.logger_names[entity.unit_number]), true)
 			storage.logger_names[entity.unit_number] = nil
 		else
-			log_name_change(entity, "???", "<destroyed>")
+			log_name(entity, "destroyed ???")
 			helpers.write_file("signals.txt", string.format("%s [%d ???] destructed\n", tick2time(game.tick), entity.unit_number), true)
 		end
 		if storage.signals then
@@ -267,7 +266,7 @@ script.on_load(function()
 	helpers.write_file("signals.txt", "==== NEW SESSION ====\n", true)
 	if storage and storage.registered_loggers and storage.logger_names and storage.signals then
 		for unit_number, entity in pairs(storage.registered_loggers) do
-			log_name_change(entity, storage.logger_names[unit_number], storage.logger_names[unit_number])
+			log_name(entity, string.format("loaded %s",storage.logger_names[unit_number]))
 			log_signals(entity, storage.signals[unit_number])
 		end
 	else
@@ -279,7 +278,7 @@ end)
 
 -- Сохранение настроек в чертеж
 script.on_event(defines.events.on_player_setup_blueprint, function(event)
-	game.print("on_player_setup_blueprint")
+	--game.print("on_player_setup_blueprint")
 	local player = game.get_player(event.player_index)
 	if not player then return end
 	
@@ -314,7 +313,7 @@ end)
 
 -- Восстановление настроек из чертежа
 script.on_event(defines.events.on_built_entity, function(event)
-	game.print("on_built_entity")
+	--game.print("on_built_entity")
 	local entity = event.created_entity or event.entity
 	if entity and entity.valid and entity.name == "signal-logger" and entity.unit_number then
 		-- Проверяем есть ли сохраненное имя в tags
@@ -342,7 +341,7 @@ script.on_event(defines.events.on_entity_settings_pasted, function(event)
 			if name then
 				local old_name = storage.logger_names[dest_id]
 				storage.logger_names[dest_id] = name
-				log_name_change(destination, old_name, name)
+				log_name(destination, string.format("renamed %s -> %s",old_name, name))
 			end
 		end
 	end
