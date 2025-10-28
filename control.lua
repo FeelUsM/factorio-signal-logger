@@ -287,7 +287,6 @@ end
 script.on_event(defines.events.on_tick, function(event)
 	if global_oninit>0 then
 		local found = {}
-		game.print("init")
 
 		for _, surface in pairs(game.surfaces) do
 			for _, entity in pairs(surface.find_entities_filtered{name="signal-logger"}) do
