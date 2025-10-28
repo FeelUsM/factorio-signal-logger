@@ -239,6 +239,7 @@ script.on_load(function()
 	helpers.write_file("signals.txt", "==== NEW SESSION ====\n", true)
 	registered_loggers = {}
 	global_open_guis = {}
+	global_oninit = 0
 	if storage and storage.signals then
 		global_oninit = 1 -- init-compare
 	else
@@ -284,8 +285,9 @@ local function signals_changed(a, b)
 end
 
 script.on_event(defines.events.on_tick, function(event)
-	if global_oninit then
+	if global_oninit>0 then
 		local found = {}
+		game.print("init")
 
 		for _, surface in pairs(game.surfaces) do
 			for _, entity in pairs(surface.find_entities_filtered{name="signal-logger"}) do
