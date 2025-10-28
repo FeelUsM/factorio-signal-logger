@@ -10,9 +10,9 @@ local function tick2time(t)
 	return string.format("%d-%02d:%02d:%02d.%02d", d, h, m, s, t)
 end
 
-local function log_name(entity, message)
+local function log_name(entity, message, error)
 	if not (entity and entity.valid) then
-		global_error = true
+		game.print("invalid entity")
 		return
 	end
 	local pos = entity.position
@@ -22,19 +22,23 @@ local function log_name(entity, message)
 	else
 		tick = "startup"
 	end
-	local line = string.format("%s, [%d: %d, %d], %s\n", 
+	local line = string.format("%s, [%d: %d, %d], %s %s.", 
 		tick, 
 		entity.unit_number,
 		pos.x, 
 		pos.y, 
-		message
+		message,
+		entity.combinator_description
 	)
-	helpers.write_file("signals.txt", line, true)
+	helpers.write_file("signals.txt", line.."\n", true)
+	if error then
+		game.print(line)
+	end
 end
 
-local function log_signals(entity, new_signals)
+local function log_signals(entity)
 	if not (entity and entity.valid) then
-		global_error = true
+		game.print("invalid entity")
 		return
 	end
 	local tick
@@ -43,7 +47,8 @@ local function log_signals(entity, new_signals)
 	else
 		tick = "startup"
 	end
-	local line = string.format("%s, [%d %s] {", tick, entity.unit_number, storage.logger_names[entity.unit_number])
+	local line = string.format("%s, [%d %s] {", tick, entity.unit_number, entity.combinator_description)
+	local new_signals = storage.signals[entity.unit_number]
 	if new_signals then
 		for i =1,#new_signals do
 			line = line .. string.format("%s.%s = %d, ", new_signals[i].signal.name, new_signals[i].signal.quality, new_signals[i].count)
@@ -78,16 +83,10 @@ local function create_gui(player, entity)
 	flow.add{type = "label", caption = "Имя логгера:"}
 	
 	-- Получаем сохраненное имя из storage
-	local unit_number = entity.unit_number
-	local current_name = ""
-	if unit_number and storage.logger_names and storage.logger_names[unit_number] then
-		current_name = storage.logger_names[unit_number]
-	end
-	
 	local textfield = flow.add{
 		type = "textfield",
 		name = "logger_name_field",
-		text = current_name
+		text = entity.combinator_description
 	}
 	textfield.style.width = 300
 	textfield.focus()
@@ -125,13 +124,15 @@ local function close_gui(player)
 	global_open_guis[player.index] = nil
 end
 
--- Открытие GUI при клике на сущность
+-- Открытие GUI при клике на сущность или призрак
 script.on_event(defines.events.on_gui_opened, function(event)
 	local entity = event.entity
-	if entity and entity.valid and entity.name == "signal-logger" then
+	
+	if entity and entity.valid and (entity.name == "signal-logger" or entity.name == "entity-ghost" and entity.ghost_name == "signal-logger") then
 		local player = game.get_player(event.player_index)
 		if player then
 			create_gui(player, entity)
+			return
 		end
 	end
 end)
@@ -145,26 +146,21 @@ script.on_event(defines.events.on_gui_click, function(event)
 	
 	if element.name == "logger_ok_button" then
 		local entity = global_open_guis[player.index]
-		if entity and entity.valid and entity.unit_number then
+		if entity and entity.valid then
 			local gui = player.gui.screen.signal_logger_gui
 			if gui then
 				local textfield = gui.children[1].logger_name_field
 				local new_name = textfield.text or ""
 				
-				-- Получаем старое имя из storage
-				local unit_number = entity.unit_number
-				storage.logger_names = storage.logger_names or {}
-				local old_name = storage.logger_names[unit_number] or ""
-				
-				-- Логируем только если имя действительно изменилось
-				if old_name ~= new_name then
-					log_name(entity, string.format("renamed %s -> %s",old_name, new_name))
+				if (entity.name == "signal-logger" or entity.name == "entity-ghost" and entity.ghost_name == "signal-logger") then
+					-- Работаем с призраком
+					local tags = entity.tags or {}
+					local old_name = entity.combinator_description or ""
 					
-					-- Сохраняем новое имя в storage
-					storage.logger_names[unit_number] = new_name
-					
-					--game.print(string.format("[Signal Logger] Имя изменено: '%s' -> '%s' at [%d, %d]", 
-						--old_name, new_name, entity.position.x, entity.position.y))
+					if old_name ~= new_name then
+						entity.combinator_description = new_name
+						log_name(entity, string.format("renamed %s ->", old_name))
+					end
 				end
 			end
 		end
@@ -184,20 +180,17 @@ end)
 
 ---------------------------------------------------
 --- Инициализация ---
-local function constructor(entity, name)
+
+local function constructor(entity, nolog)
 	if entity and entity.name == "signal-logger" and entity.unit_number then
-		if storage.registered_loggers then
-			storage.registered_loggers[entity.unit_number] = entity
+		registered_loggers[entity.unit_number] = entity
+		entity.combinator_description = entity.combinator_description or ""
+		storage.signals[entity.unit_number] = storage.signals[entity.unit_number] or {}
+		if not nolog then
+			log_name(entity, "created")
 		end
-		if storage.logger_names then
-			storage.logger_names[entity.unit_number] = name or ""
-		end
-		if storage.signals then
-			storage.signals[entity.unit_number] = {}
-		end
-		log_name(entity, string.format("created %s", name))
 	else
-		game.print("signal-logger constructor: wrong enity\n")
+		game.print("signal-logger constructor: wrong entity")
 	end
 end
 
@@ -207,30 +200,19 @@ local function metaconstructor(event)
 	end
 end
 
---script.on_event(defines.events.on_built_entity,                metaconstructor)  -- игрок построил руками
-script.on_event(defines.events.on_robot_built_entity,          metaconstructor)  -- робот построил
-script.on_event(defines.events.script_raised_built,            metaconstructor)  -- другой скрипт создал сущность
-script.on_event(defines.events.script_raised_revive,           metaconstructor)  -- сущность восстановлена из призрака скриптом
-script.on_event(defines.events.on_space_platform_built_entity, metaconstructor)  -- построено на космической 
+script.on_event(defines.events.on_built_entity,                metaconstructor)
+script.on_event(defines.events.on_robot_built_entity,          metaconstructor)
+script.on_event(defines.events.script_raised_built,            metaconstructor)
+script.on_event(defines.events.script_raised_revive,           metaconstructor)
+script.on_event(defines.events.on_space_platform_built_entity, metaconstructor)
 
 local function destructor(entity)
 	if entity and entity.name == "signal-logger" and entity.unit_number then
-		if storage.logger_names then
-			log_name(entity, string.format("destroyed %s",storage.logger_names[entity.unit_number]))
-			helpers.write_file("signals.txt", string.format("%s [%d %s] destructed\n", tick2time(game.tick), entity.unit_number, storage.logger_names[entity.unit_number]), true)
-			storage.logger_names[entity.unit_number] = nil
-		else
-			log_name(entity, "destroyed ???")
-			helpers.write_file("signals.txt", string.format("%s [%d ???] destructed\n", tick2time(game.tick), entity.unit_number), true)
-		end
-		if storage.signals then
-			storage.signals[entity.unit_number] = nil
-		end
-		if storage.registered_loggers then
-			storage.registered_loggers[entity.unit_number] = nil
-		end
+		log_name(entity, "destroyed")
+		storage.signals[entity.unit_number] = nil
+		registered_loggers[entity.unit_number] = nil
 	else
-		game.print("signal-logger destructor: wrong enity\n")
+		game.print("signal-logger destructor: wrong entity")
 	end
 end
 
@@ -244,110 +226,44 @@ script.on_event(defines.events.on_entity_died,         metadestructor)
 script.on_event(defines.events.on_player_mined_entity, metadestructor)
 script.on_event(defines.events.on_robot_mined_entity,  metadestructor)
 
-local function init()
-	if not storage then storage = {} end
-	storage.registered_loggers = {}
-	storage.logger_names = {}
-	storage.signals = {}
-	for _, surface in pairs(game.surfaces) do
-		for _, entity in pairs(surface.find_entities_filtered{name="signal-logger"}) do
-			constructor(entity)
-		end
-	end
-end
-
 script.on_init(function()
 	helpers.write_file("signals.txt", "==== INIT ====\n", true)
-	init()
+	storage = {}
+	storage.signals = {} -- unit_number -> signals
+	registered_loggers = {} -- unit_number -> pointer
 	global_open_guis = {}
+	global_oninit = 2 -- full init
 end)
 
 script.on_load(function()
 	helpers.write_file("signals.txt", "==== NEW SESSION ====\n", true)
-	if storage and storage.registered_loggers and storage.logger_names and storage.signals then
-		for unit_number, entity in pairs(storage.registered_loggers) do
-			log_name(entity, string.format("loaded %s",storage.logger_names[unit_number]))
-			log_signals(entity, storage.signals[unit_number])
-		end
-	else
-		helpers.write_file("signals.txt", "!!!!!!! DATA LOST !!!!!!!\n", true)
-		global_error = true
-	end
+	registered_loggers = {}
 	global_open_guis = {}
-end)
-
--- Сохранение настроек в чертеж
-script.on_event(defines.events.on_player_setup_blueprint, function(event)
-	--game.print("on_player_setup_blueprint")
-	local player = game.get_player(event.player_index)
-	if not player then return end
-	
-	local blueprint = player.blueprint_to_setup
-	if not blueprint or not blueprint.valid_for_read then
-		blueprint = player.cursor_stack
-	end
-	
-	if blueprint and blueprint.valid_for_read and blueprint.is_blueprint then
-		local entities = blueprint.get_blueprint_entities()
-		if not entities then return end
-		
-		local mapping = event.mapping.get()
-		
-		for idx, bp_entity in pairs(entities) do
-			if bp_entity.name == "signal-logger" then
-				-- Находим реальную сущность через mapping
-				local real_entity = mapping[idx]
-				if real_entity and real_entity.valid and real_entity.unit_number then
-					local name = storage.logger_names[real_entity.unit_number]
-					if name and name ~= "" then
-						-- Сохраняем имя в tags чертежа
-						bp_entity.tags = bp_entity.tags or {}
-						bp_entity.tags.logger_name = name
-						blueprint.set_blueprint_entities(entities)
-					end
-				end
-			end
-		end
-	end
-end)
-
--- Восстановление настроек из чертежа
-script.on_event(defines.events.on_built_entity, function(event)
-	--game.print("on_built_entity")
-	local entity = event.created_entity or event.entity
-	if entity and entity.valid and entity.name == "signal-logger" and entity.unit_number then
-		-- Проверяем есть ли сохраненное имя в tags
-		local name = ""
-		if event.tags and event.tags.logger_name then
-			name = event.tags.logger_name
-		end
-		constructor(entity,name)
+	if storage and storage.signals then
+		global_oninit = 1 -- init-compare
+	else
+		storage = {}
+		storage.signals = {}
+		global_oninit = 2
+		helpers.write_file("signals.txt", "!!!!!!! DATA LOST !!!!!!!\n", true)
 	end
 end)
 
 -- Копирование настроек через Shift+ПКМ/ЛКМ
 script.on_event(defines.events.on_entity_settings_pasted, function(event)
-	--game.print("on_entity_settings_pasted")
 	local source = event.source
 	local destination = event.destination
 	
-	if source and source.valid and source.name == "signal-logger" and
+	if source and source.valid and (source.name == "signal-logger" or source.name=="entity-ghost" and source.ghost_name == "signal-logger") and
 	   destination and destination.valid and destination.name == "signal-logger" then
-		local source_id = source.unit_number
-		local dest_id = destination.unit_number
-		
-		if source_id and dest_id and storage.logger_names then
-			local name = storage.logger_names[source_id]
-			if name then
-				local old_name = storage.logger_names[dest_id]
-				storage.logger_names[dest_id] = name
-				log_name(destination, string.format("renamed %s -> %s",old_name, name))
-			end
-		end
+		local name = source.combinator_description
+		local old_name = destination.combinator_description
+		log_name(destination, "renamed to")
 	end
 end)
 
 ---------------------------------------------------------------
+--- Логирование сигналов ---
 
 local function get_signals(entity)
 	return entity.get_signals(defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green)
@@ -356,33 +272,64 @@ end
 local function signals_changed(a, b)
 	if not a then a = {} end
 	if not b then b = {} end
-	if #a ~= #b then return true end -- "different length" end
+	if #a ~= #b then return true end
 	for i = 1, #a do
 		if a[i].signal.name ~= b[i].signal.name or
 			a[i].signal.quality ~= b[i].signal.quality or
 			a[i].count ~= b[i].count then
-			return true -- string.format("different position %d",i)
+			return true
 		end
 	end
-	return false -- "same"
+	return false
 end
 
 script.on_event(defines.events.on_tick, function(event)
-	if global_error then
-		init()
-		global_error = false
+	if global_oninit then
+		local found = {}
+
+		for _, surface in pairs(game.surfaces) do
+			for _, entity in pairs(surface.find_entities_filtered{name="signal-logger"}) do
+				found[entity.unit_number] = entity
+
+				if global_oninit==1 then
+					if not storage.signals[entity.unit_number] then
+						log_name(entity, "lost signals for",true)
+					else
+						log_name(entity, "loaded")
+						log_signals(entity)
+					end
+				end
+				if global_oninit==2 then
+					log_name(entity, "alredy exist",true)
+				end
+
+				constructor(entity, true)
+			end
+		end
+		for unit_number, signals in pairs(storage.signals) do
+			if not found[unit_number] then
+				local line = string.format("trash %d",unit_number)
+				helpers.write_file("signals.txt",line.."\n",true)
+				game.print(line)
+			end
+		end
+
+		global_oninit = 0
 	end
-	--for _, surface in pairs(game.surfaces) do
-		--for _, entity in pairs(surface.find_entities_filtered{name="signal-logger"}) do
-	if storage and storage.registered_loggers then
-		for unit_number, entity in pairs(storage.registered_loggers) do
-			if entity.unit_number then
+	
+	if storage and registered_loggers then
+		for unit_number, entity in pairs(registered_loggers) do
+			if entity.valid and entity.unit_number then
 				local new_signals = get_signals(entity)
 				local old_signals = storage.signals[entity.unit_number] or {}
 				if signals_changed(old_signals, new_signals) then
-					log_signals(entity, new_signals)
 					storage.signals[entity.unit_number] = new_signals
+					log_signals(entity)
 				end
+			else
+				-- Сущность невалидна, удаляем из реестра
+				registered_loggers[unit_number] = nil
+				storage.signals[unit_number] = nil
 			end
 		end
 	end
