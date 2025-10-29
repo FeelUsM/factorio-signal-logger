@@ -30,13 +30,40 @@ local function log_name(entity, message, error)
 		message,
 		entity.combinator_description
 	)
-	helpers.write_file("signals.txt", line.."\n", true)
+	helpers.write_file(_log_name, line.."\n", true)
 	if error then
 		game.print(line)
 	end
 end
 
-local function log_signals(entity)
+local function signals2map(arr)
+	local map = {}
+	arr = arr or {}
+	for i = 1, #arr do
+		local quality = arr[i].signal.quality or ""
+		map[string.gsub(arr[i].signal.name, "-", "_").."_"..quality] = arr[i].count
+	end
+	return map
+end
+
+local function get_changes(a, b)
+	local changed = {}
+	for k,v in pairs(b) do
+		if not a[k] then
+			changed[k] = {0, v}
+		elseif a[k]~=v then
+			changed[k] = {a[k], v}
+		end
+	end
+	for k,v in pairs(a) do
+		if not b[k] then
+			changed[k] = {v, 0}
+		end
+	end
+	return changed
+end
+
+local function log_signals(entity, old_signals)
 	if not (entity and entity.valid) then
 		game.print("invalid entity")
 		return
@@ -47,15 +74,22 @@ local function log_signals(entity)
 	else
 		tick = "startup"
 	end
+
 	local line = string.format("%s, [%d %s] {", tick, entity.unit_number, entity.combinator_description)
-	local new_signals = storage.signals[entity.unit_number]
-	if new_signals then
-		for i =1,#new_signals do
-			line = line .. string.format("%s.%s = %d, ", new_signals[i].signal.name, new_signals[i].signal.quality, new_signals[i].count)
+	local new_signals = signals2map(storage.signals[entity.unit_number])
+	old_signals = signals2map(old_signals)
+	local changed = get_changes(old_signals, new_signals)
+
+	for k,v in pairs(changed) do
+		line = line .. string.format("%s = %d -> %d, ", k, v[1], v[2])
+	end
+	for k,v in pairs(new_signals) do
+		if not changed[k] then
+			line = line .. string.format("%s = %d, ", k,v)
 		end
 	end
 	line = line .. "}\n"
-	helpers.write_file("signals.txt", line, true)
+	helpers.write_file(_log_name, line, true)
 end
 
 ---------------------------------------------------
@@ -110,8 +144,8 @@ local function create_gui(player, entity)
 	}
 	
 	-- Сохраняем ссылку на entity
-	global_open_guis = global_open_guis or {}
-	global_open_guis[player.index] = entity
+	_global_open_guis = _global_open_guis or {}
+	_global_open_guis[player.index] = entity
 	
 	player.opened = frame
 end
@@ -120,8 +154,8 @@ local function close_gui(player)
 	if player.gui.screen.signal_logger_gui then
 		player.gui.screen.signal_logger_gui.destroy()
 	end
-	global_open_guis = global_open_guis or {}
-	global_open_guis[player.index] = nil
+	_global_open_guis = _global_open_guis or {}
+	_global_open_guis[player.index] = nil
 end
 
 -- Открытие GUI при клике на сущность или призрак
@@ -145,7 +179,7 @@ script.on_event(defines.events.on_gui_click, function(event)
 	local element = event.element
 	
 	if element.name == "logger_ok_button" then
-		local entity = global_open_guis[player.index]
+		local entity = _global_open_guis[player.index]
 		if entity and entity.valid then
 			local gui = player.gui.screen.signal_logger_gui
 			if gui then
@@ -183,7 +217,7 @@ end)
 
 local function constructor(entity, nolog)
 	if entity and entity.name == "signal-logger" and entity.unit_number then
-		registered_loggers[entity.unit_number] = entity
+		_registered_loggers[entity.unit_number] = entity
 		entity.combinator_description = entity.combinator_description or ""
 		storage.signals[entity.unit_number] = storage.signals[entity.unit_number] or {}
 		if not nolog then
@@ -210,7 +244,7 @@ local function destructor(entity)
 	if entity and entity.name == "signal-logger" and entity.unit_number then
 		log_name(entity, "destroyed")
 		storage.signals[entity.unit_number] = nil
-		registered_loggers[entity.unit_number] = nil
+		_registered_loggers[entity.unit_number] = nil
 	else
 		game.print("signal-logger destructor: wrong entity")
 	end
@@ -226,29 +260,71 @@ script.on_event(defines.events.on_entity_died,         metadestructor)
 script.on_event(defines.events.on_player_mined_entity, metadestructor)
 script.on_event(defines.events.on_robot_mined_entity,  metadestructor)
 
+-- global variables :
+-- _global_open_guis - для GUI
+-- _registered_loggers - map unit_number -> link
+-- _global_oninit - int: 0 не требуется, 1 - on_load, 2 - on_init или on_load при потере данных
+-- _on_load_prompt - первое сообщение в лог
+-- _log_name - имя лога
+
 script.on_init(function()
-	helpers.write_file("signals.txt", "==== INIT ====\n", true)
+	_on_load_prompt = "==== INIT ====\n"
 	storage = {}
 	storage.signals = {} -- unit_number -> signals
-	registered_loggers = {} -- unit_number -> pointer
-	global_open_guis = {}
-	global_oninit = 2 -- full init
+	_registered_loggers = {} -- unit_number -> pointer
+	_global_open_guis = {}
+	_global_oninit = 2 -- full init
+	_log_name = "signals.txt"
 end)
 
 script.on_load(function()
-	helpers.write_file("signals.txt", "==== NEW SESSION ====\n", true)
-	registered_loggers = {}
-	global_open_guis = {}
-	global_oninit = 0
+	_on_load_prompt = "==== NEW SESSION ====\n"
+	_registered_loggers = {}
+	_global_open_guis = {}
+	_global_oninit = 0
+	_log_name = "signals.txt"
 	if storage and storage.signals then
-		global_oninit = 1 -- init-compare
+		_global_oninit = 1 -- init-compare
 	else
 		storage = {}
 		storage.signals = {}
-		global_oninit = 2
-		helpers.write_file("signals.txt", "!!!!!!! DATA LOST !!!!!!!\n", true)
+		_global_oninit = 2
+		_on_load_prompt = _on_load_prompt .. "!!!!!!! DATA LOST !!!!!!!\n"
 	end
 end)
+
+local function init() -- вызывается при первом тике после загрузки, в начале
+	_log_name = string.format("signals-%d.txt",game.surfaces["nauvis"].map_gen_settings.seed)
+	helpers.write_file(_log_name,_on_load_prompt,true)
+
+	local found = {}
+	for _, surface in pairs(game.surfaces) do
+		for _, entity in pairs(surface.find_entities_filtered{name="signal-logger"}) do
+			found[entity.unit_number] = entity
+
+			if _global_oninit==1 then
+				if not storage.signals[entity.unit_number] then
+					log_name(entity, "lost signals for",true)
+				else
+					log_name(entity, "loaded")
+					log_signals(entity, {})
+				end
+			end
+			if _global_oninit==2 then
+				log_name(entity, "alredy exist",true)
+			end
+
+			constructor(entity, true)
+		end
+	end
+	for unit_number, signals in pairs(storage.signals) do
+		if not found[unit_number] then
+			local line = string.format("trash %d",unit_number)
+			helpers.write_file(_log_name,line.."\n",true)
+			game.print(line)
+		end
+	end
+end
 
 -- Копирование настроек через Shift+ПКМ/ЛКМ
 script.on_event(defines.events.on_entity_settings_pasted, function(event)
@@ -267,17 +343,21 @@ end)
 --- Логирование сигналов ---
 
 local function get_signals(entity)
-	return entity.get_signals(defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green)
+	return entity.get_signals(defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green) or {}
 end
 
 local function signals_changed(a, b)
 	if not a then a = {} end
 	if not b then b = {} end
-	if #a ~= #b then return true end
+	if #a ~= #b then 
+		--game.print("different length")
+		return true 
+	end
 	for i = 1, #a do
 		if a[i].signal.name ~= b[i].signal.name or
 			a[i].signal.quality ~= b[i].signal.quality or
 			a[i].count ~= b[i].count then
+			--game.print(string.format("different other %s==%s, %s==%s, %d==%d", a[i].signal.name, b[i].signal.name, a[i].signal.quality, b[i].signal.quality,	a[i].count, b[i].count))
 			return true
 		end
 	end
@@ -285,51 +365,23 @@ local function signals_changed(a, b)
 end
 
 script.on_event(defines.events.on_tick, function(event)
-	if global_oninit>0 then
-		local found = {}
-
-		for _, surface in pairs(game.surfaces) do
-			for _, entity in pairs(surface.find_entities_filtered{name="signal-logger"}) do
-				found[entity.unit_number] = entity
-
-				if global_oninit==1 then
-					if not storage.signals[entity.unit_number] then
-						log_name(entity, "lost signals for",true)
-					else
-						log_name(entity, "loaded")
-						log_signals(entity)
-					end
-				end
-				if global_oninit==2 then
-					log_name(entity, "alredy exist",true)
-				end
-
-				constructor(entity, true)
-			end
-		end
-		for unit_number, signals in pairs(storage.signals) do
-			if not found[unit_number] then
-				local line = string.format("trash %d",unit_number)
-				helpers.write_file("signals.txt",line.."\n",true)
-				game.print(line)
-			end
-		end
-
-		global_oninit = 0
+	if _global_oninit>0 then
+		init()
+		_global_oninit = 0
 	end
 	
-	if storage and registered_loggers then
-		for unit_number, entity in pairs(registered_loggers) do
+	if storage and _registered_loggers then
+		for unit_number, entity in pairs(_registered_loggers) do
 			if entity.valid and entity.unit_number then
 				local new_signals = get_signals(entity)
 				local old_signals = storage.signals[entity.unit_number] or {}
 				if signals_changed(old_signals, new_signals) then
 					storage.signals[entity.unit_number] = new_signals
-					log_signals(entity)
+					log_signals(entity, old_signals)
 				end
 			else
 				-- Сущность невалидна, удаляем из реестра
-				registered_loggers[unit_number] = nil
+				_registered_loggers[unit_number] = nil
 				storage.signals[unit_number] = nil
 			end
 		end
